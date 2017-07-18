@@ -9,44 +9,69 @@ import (
 	"github.com/julianbachiller/wwgb-wolang/wolang"
 )
 
-func main() {
+func startClient() (chan string, chan interface{}, chan error) {
 
-	var result interface{}
-	var parsed interface{}
+	inputCh := make(chan string)
+	resultCh := make(chan interface{})
+	errCh := make(chan error)
 
-	var unparsed string
-
-	var err error
-
-	reader := bufio.NewReader(os.Stdin)
-
-	for true {
-		fmt.Print("wolang> ")
-		if input, readErr := reader.ReadString('\n'); readErr != nil {
-			panic(readErr.Error())
-		} else {
-			// Remove trailing newline chars \n and \r for Win. compat
-			unparsed = strings.TrimSuffix(strings.TrimSuffix(input, "\n"), "\r")
-
-			// Parse and eval until no more input
-			for len(unparsed) > 0 {
-				unparsed, parsed, err = wolang.Parse(unparsed)
-				if err != nil {
-					// Display error and break to main eval loop
-					fmt.Println(err.Error())
-					break
-				}
-
-				result, err = wolang.Eval(parsed)
-				if err != nil {
-					// Display error and break to main eval loop
-					fmt.Println(err.Error())
-					break
-				}
-
-				// Display result
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			fmt.Print("wolang> ")
+			if input, readErr := reader.ReadString('\n'); readErr != nil {
+				panic(readErr.Error())
+			} else {
+				inputCh <- input
+			}
+			select {
+			case err := <-errCh:
+				fmt.Println(err.Error())
+			case result := <-resultCh:
 				fmt.Println(result)
 			}
 		}
+	}()
+	return inputCh, resultCh, errCh;
+}
+
+func startParsing(inputCh chan string, errCh chan error) chan wolang.DataType {
+	parsedCh := make(chan wolang.DataType)
+	go func() {
+		var (
+			err error
+			parsed wolang.DataType
+		)
+		for input := range inputCh {
+			_, parsed, err = wolang.Parse(strings.TrimSuffix(strings.TrimSuffix(input, "\n"), "\r"))
+			if err != nil {
+				fmt.Println(err)
+				errCh <- err
+			}
+			parsedCh <- parsed
+		}
+	}()
+	return parsedCh
+}
+
+func startEvaluating(parsedCh chan wolang.DataType, resultCh chan interface{}, errCh chan error) {
+	go func() {
+		for parsed := range parsedCh {
+			if result, err := wolang.Eval(parsed); err != nil {
+				errCh <- err
+			} else {
+				resultCh <- result
+			}
+		}
+	}()
+}
+
+func main() {
+
+	readInputCh, resultCh, errCh := startClient()
+	readParseDataCh := startParsing(readInputCh, errCh)
+	startEvaluating(readParseDataCh, resultCh, errCh)
+
+	for true {
 	}
 }
